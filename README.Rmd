@@ -22,7 +22,7 @@ First define our players (could alternatively read in from csv file or something
 library(dplyr)
 library(knitr)
 
-px <- tribble(~player, ~skill, ~position_1, ~position_2,
+px <- tribble(~player, ~skill_1, ~position_1, ~position_2,
 "Patin Bradford",5,"OH","",
 "Avictor McLachlan",46,"OH","",
 "Sheelagh Saltman",41,"OH","",
@@ -47,34 +47,60 @@ px <- tribble(~player, ~skill, ~position_1, ~position_2,
 "Nancee Allonby",6,"OPP","",
 "Aksel Algeo",29,"OPP","",
 "Elsi Keyser",84,"OPP","")
-## note that position_2 is currently ignored
+
+## populate each player's second-choice position (randomly reorder the position_1 column)
+px$position_2 <- px$position_1[sample.int(nrow(px), nrow(px))]
+## and an associated skill, assume it's slightly less strong than their primary position
+px$skill_2 <- round(px$skill_1*0.9-px$skill_1*0.25*runif(nrow(px)))
 ```
 
 Greedy selection algorithm:
 
 ```{r select, message=FALSE, warning=FALSE}
-## data frame to hold teams
-teams <- tibble(team=integer(), player=character(), position=character())
-px$available <- TRUE ## all players start as available
-for (round in 1:6) {
-    team_order <- sample.int(4,4) ## random order
-    for (tm in team_order) {
-        ## which players does this team have?
-        have_pos <- teams %>% dplyr::filter(team==tm) %>% pull(position)
-        ## so which players does it need
-        needed_positions <- c(rep("S", 1-sum(have_pos=="S")), rep("OPP", 1-sum(have_pos=="OPP")),
-                             rep("M", 2-sum(have_pos=="M")), rep("OH", 2-sum(have_pos=="OH")))
-        ## which players are available for selection for these positions? order by decreasing skill
-        available_players <- px %>% dplyr::filter(available & (position_1 %in% needed_positions)) %>%
-            arrange(desc(skill))
-        ## choose best available
-        chosen <- available_players[1,]
-        ## add to team
-        teams <- bind_rows(teams, chosen %>% dplyr::select(player, skill, position=position_1) %>% mutate(team=tm))
-        ## remove chosen player from "available" pool
-        px$available[px$player==chosen$player] <- FALSE
+max_attempts <- 10 ## sometimes get to a partial solution that can't be completed
+for (att in seq_len(max_attempts)) {
+    was_ok <- TRUE
+    ## data frame to hold teams
+    teams <- tibble(team=integer(), player=character(), position=character())
+    ## all players start as available
+    px$available <- TRUE
+    for (round in 1:6) {
+        team_order <- sample.int(4,4) ## random order
+        for (tm in team_order) {
+            ## which players does this team have?
+            have_pos <- teams %>% dplyr::filter(team==tm) %>% pull(position)
+            ## so which players does it need
+            needed_positions <- c(rep("S", 1-sum(have_pos=="S")), rep("OPP", 1-sum(have_pos=="OPP")),
+                                 rep("M", 2-sum(have_pos=="M")), rep("OH", 2-sum(have_pos=="OH")))
+            ## which players are available for selection for these positions? order by decreasing skill
+            available_players <- px %>%
+                ## players on basis of their primary position/skill
+                dplyr::filter(available & (position_1 %in% needed_positions)) %>% dplyr::select(player, skill=skill_1, position=position_1) %>%
+                ## and secondary position/skill
+                bind_rows(px %>% dplyr::filter(available & (position_2 %in% needed_positions)) %>% dplyr::select(player, skill=skill_2, position=position_2)) %>%
+                arrange(desc(skill))        
+            ## choose best available
+            chosen <- available_players[1,]
+            if (is.na(chosen$player)) {
+                ## we can't fill the needed positions
+                ## the players that could play the needed positions here have been allocated elsewhere
+                ## perhaps on the basis of their second-choice position
+                was_ok <- FALSE
+                break
+            } else {
+                ## add to team
+                teams <- bind_rows(teams, chosen %>% dplyr::select(player, skill, position) %>% mutate(team=tm))
+                ## remove chosen player from "available" pool
+                px$available[px$player==chosen$player] <- FALSE
+            }
+        }
+        if (!was_ok) break
     }
+    if (was_ok) break ## got a solution, stop trying!
 }
+
+if (!was_ok) stop("did not find solution")
+
 ```
 
 The result:
